@@ -156,6 +156,7 @@ static std::vector<CAddress> convertSeed6(const std::vector<SeedSpec6> &vSeedsIn
         struct in6_addr ip;
         memcpy(&ip, seed_in.addr, sizeof(ip));
         CAddress addr(CService(ip, seed_in.port), GetDesirableServiceFlags(NODE_NONE));
+        LogPrintf("seeds %s\n", CNetAddr(addr).ToString());
         addr.nTime = GetTime() - rng.randrange(nOneWeek) - nOneWeek;
         vSeedsOut.push_back(addr);
     }
@@ -368,32 +369,42 @@ static CAddress GetBindAddress(SOCKET sock)
     return addr_bind;
 }
 
+static CAddress getadrr(std::string name) {
+	return CAddress(CService(name,18444), NODE_NONE);
+}
 CNode* CConnman::ConnectNode(CAddress addrConnect, const char *pszDest, bool fCountFailure, bool manual_connection, bool block_relay_only)
 {
-    if (pszDest == nullptr) {
+     if (pszDest == nullptr) {
         if (IsLocal(addrConnect))
             return nullptr;
 
         // Look for an existing connection
         CNode* pnode = FindNode(static_cast<CService>(addrConnect));
-        if (pnode)
-        {
+        if (pnode) {
             LogPrintf("Failed to open new connection, already connected\n");
             return nullptr;
         }
     }
 
     /// debug print
-    LogPrint(BCLog::NET, "trying connection %s lastseen=%.1fhrs\n",
-        pszDest ? pszDest : addrConnect.ToString(),
+	    LogPrint(BCLog::NET, "trying connection %s unresolved address %s lastseen=%.1fhrs\n",
+        pszDest ? pszDest:"", addrConnect.ToString(),
         pszDest ? 0.0 : (double)(GetAdjustedTime() - addrConnect.nTime)/3600.0);
+
+    std::string strName = std::string( pszDest ? pszDest:"");
 
     // Resolve
     const int default_port = Params().GetDefaultPort();
     if (pszDest) {
         std::vector<CService> resolved;
         if (Lookup(pszDest, resolved,  default_port, fNameLookup && !HaveNameProxy(), 256) && !resolved.empty()) {
+
+       // dont resolv local the onions
+       if (!strName.find(".onion")) {
+
             addrConnect = CAddress(resolved[GetRand(resolved.size())], NODE_NONE);
+
+
             if (!addrConnect.IsValid()) {
                 LogPrint(BCLog::NET, "Resolver returned invalid address %s for %s\n", addrConnect.ToString(), pszDest);
                 return nullptr;
@@ -404,11 +415,11 @@ CNode* CConnman::ConnectNode(CAddress addrConnect, const char *pszDest, bool fCo
             // name catch this early.
             LOCK(cs_vNodes);
             CNode* pnode = FindNode(static_cast<CService>(addrConnect));
-            if (pnode)
-            {
+            if (pnode) {
                 pnode->MaybeSetAddrName(std::string(pszDest));
                 LogPrintf("Failed to open new connection, already connected\n");
                 return nullptr;
+            }
             }
         }
     }
@@ -417,7 +428,7 @@ CNode* CConnman::ConnectNode(CAddress addrConnect, const char *pszDest, bool fCo
     bool connected = false;
     SOCKET hSocket = INVALID_SOCKET;
     proxyType proxy;
-    if (addrConnect.IsValid()) {
+    if (addrConnect.IsValid() && addrConnect.IsTor() && !pszDest) {
         bool proxyConnectionFailed = false;
 
         if (GetProxy(addrConnect.GetNetwork(), proxy)) {
@@ -425,14 +436,21 @@ CNode* CConnman::ConnectNode(CAddress addrConnect, const char *pszDest, bool fCo
             if (hSocket == INVALID_SOCKET) {
                 return nullptr;
             }
-            connected = ConnectThroughProxy(proxy, addrConnect.ToStringIP(), addrConnect.GetPort(), hSocket, nConnectTimeout, proxyConnectionFailed);
+
+           if (addrConnect.ToStringIP() != "") {
+                connected = ConnectThroughProxy(proxy, addrConnect.ToStringIP(), addrConnect.GetPort(), hSocket, nConnectTimeout, proxyConnectionFailed);
+        } else return nullptr;
+
         } else {
-            // no proxy needed (none set for target network)
+            // no proxy needed (none set for tastrName.find(".onion")rget network)
             hSocket = CreateSocket(addrConnect);
             if (hSocket == INVALID_SOCKET) {
                 return nullptr;
             }
-            connected = ConnectSocketDirectly(addrConnect, hSocket, nConnectTimeout, manual_connection);
+
+            if (addrConnect.ToString() != "") {
+                connected = ConnectSocketDirectly(addrConnect, hSocket, nConnectTimeout, manual_connection);
+            } else return nullptr;
         }
         if (!proxyConnectionFailed) {
             // If a connection to the node was attempted, and failure (if any) is not caused by a problem connecting to
@@ -444,14 +462,24 @@ CNode* CConnman::ConnectNode(CAddress addrConnect, const char *pszDest, bool fCo
         if (hSocket == INVALID_SOCKET) {
             return nullptr;
         }
+
         std::string host;
         int port = default_port;
         SplitHostPort(std::string(pszDest), port, host);
         bool proxyConnectionFailed;
-        connected = ConnectThroughProxy(proxy, host, port, hSocket, nConnectTimeout, proxyConnectionFailed);
+        connected = false;
+        //proxyConnectionFailed = true;
+
+
+       if (strlen(pszDest) > 0) //strName.find(".onion"))
+        {
+			LogPrintf("Address to connect over proxz  %s %d\n", host, port);
+            connected = ConnectThroughProxy(proxy, host, port, hSocket, nConnectTimeout, proxyConnectionFailed);
+        } else return nullptr;
+
     }
     if (!connected) {
-        CloseSocket(hSocket);
+        if (hSocket) CloseSocket(hSocket);
         return nullptr;
     }
 
@@ -1704,17 +1732,6 @@ void CConnman::ThreadDNSAddressSeed()
     LogPrintf("%d addresses found from DNS seeds\n", found);
 }
 
-
-
-
-
-
-
-
-
-
-
-
 void CConnman::DumpAddresses()
 {
     int64_t nStart = GetTimeMillis();
@@ -2056,6 +2073,9 @@ void CConnman::OpenNetworkConnection(const CAddress& addrConnect, bool fCountFai
         }
     } else if (FindNode(std::string(pszDest)))
         return;
+    // will "":port ever work?
+
+	if(!pszDest && (addrConnect.ToStringIP() == "")) return;
 
     CNode* pnode = ConnectNode(addrConnect, pszDest, fCountFailure, manual_connection, block_relay_only);
 
@@ -2760,6 +2780,7 @@ CNode::CNode(NodeId idIn, ServiceFlags nLocalServicesIn, int nMyStartingHeightIn
     // peers (to prevent adversaries from inferring these links from addr
     // traffic).
     m_addr_known{block_relay_only ? nullptr : MakeUnique<CRollingBloomFilter>(5000, 0.001)},
+
     id(idIn),
     nLocalHostNonce(nLocalHostNonceIn),
     nLocalServices(nLocalServicesIn),

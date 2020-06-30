@@ -4,6 +4,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <netbase.h>
+#include <net.h>
 
 #include <sync.h>
 #include <tinyformat.h>
@@ -69,17 +70,18 @@ bool static LookupIntern(const std::string& name, std::vector<CNetAddr>& vIP, un
         return false;
     }
 
-    {
-        CNetAddr addr;
-        // From our perspective, onion addresses are not hostnames but rather
-        // direct encodings of CNetAddr much like IPv4 dotted-decimal notation
-        // or IPv6 colon-separated hextet notation. Since we can't use
-        // getaddrinfo to decode them and it wouldn't make sense to resolve
-        // them, we return a network address representing it instead. See
-        // CNetAddr::SetSpecial(const std::string&) for more details.
-        if (addr.SetSpecial(name)) {
+    CNetAddr addr;
+    // From our perspective, onion addresses are not hostnames but rather
+    // direct encodings of CNetAddr much like IPv4 dotted-decimal notation
+    // or IPv6 colon-separated hextet notation. Since we can't use
+    // getaddrinfo to decode them and it wouldn't make sense to resolve
+    // them, we return a network address representing it instead. See
+    // CNetAddr::SetSpecial(const std::string&) for more details.
+
+    if (name.find(".onion")) {
+        if (addr.SetSpecial(name,0)) {
             vIP.push_back(addr);
-            return true;
+            return false;
         }
     }
 
@@ -97,12 +99,19 @@ bool static LookupIntern(const std::string& name, std::vector<CNetAddr>& vIP, un
     // If we don't allow lookups, then use the AI_NUMERICHOST flag for
     // getaddrinfo to only decode numerical network addresses and suppress
     // hostname lookups.
-    aiHint.ai_flags = fAllowLookup ? AI_ADDRCONFIG : AI_NUMERICHOST;
+    aiHint.ai_flags = fAllowLookup && !HaveNameProxy() ? AI_ADDRCONFIG : AI_NUMERICHOST;
     struct addrinfo *aiRes = nullptr;
     int nErr = getaddrinfo(name.c_str(), nullptr, &aiHint, &aiRes);
-    if (nErr)
-        return false;
 
+    LogPrintf("Resolver :%s error = %d  local resolve allowed %s  %s\n", name.c_str() ,nErr,fAllowLookup, nErr?"fail":"local resolved");
+    if (nErr ) {
+        CNetAddr resolved;
+        resolved.SetInternal(name);
+        if (resolved.IsInternal()) {
+            vIP.push_back(resolved);
+        }
+        return false;
+    }
     // Traverse the linked list starting with aiTrav, add all non-internal
     // IPv4,v6 addresses to vIP while respecting nMaxSolutions.
     struct addrinfo *aiTrav = aiRes;
@@ -112,7 +121,7 @@ bool static LookupIntern(const std::string& name, std::vector<CNetAddr>& vIP, un
         if (aiTrav->ai_family == AF_INET)
         {
             assert(aiTrav->ai_addrlen >= sizeof(sockaddr_in));
-            resolved = CNetAddr(((struct sockaddr_in*)(aiTrav->ai_addr))->sin_addr);
+            resolved =  CNetAddr(((struct sockaddr_in*)(aiTrav->ai_addr))->sin_addr);
         }
 
         if (aiTrav->ai_family == AF_INET6)
@@ -139,7 +148,7 @@ bool static LookupIntern(const std::string& name, std::vector<CNetAddr>& vIP, un
  *
  * @param name    The string representing a host. Could be a name or a numerical
  *                IP address (IPv6 addresses in their bracketed form are
- *                allowed).
+ *                //        allowed).
  * @param[out] vIP The resulting network addresses to which the specified host
  *                 string resolved.
  *
@@ -182,7 +191,7 @@ bool LookupHost(const std::string& name, CNetAddr& addr, bool fAllowLookup)
     addr = vIP.front();
     return true;
 }
-
+;
 /**
  * Resolve a service string to its corresponding service.
  *
@@ -204,7 +213,7 @@ bool LookupHost(const std::string& name, CNetAddr& addr, bool fAllowLookup)
  *          resulting services.
  */
 bool Lookup(const std::string& name, std::vector<CService>& vAddr, int portDefault, bool fAllowLookup, unsigned int nMaxSolutions)
-{
+{;
     if (name.empty() || !ValidAsCString(name)) {
         return false;
     }
@@ -214,8 +223,19 @@ bool Lookup(const std::string& name, std::vector<CService>& vAddr, int portDefau
 
     std::vector<CNetAddr> vIP;
     bool fRet = LookupIntern(hostname, vIP, nMaxSolutions, fAllowLookup);
-    if (!fRet)
+    if (vIP[0].IsTor()) {
+		 vAddr.resize(hostname.size());
+	for (unsigned int i = 0; i < 1; i++)
+        vAddr[i] = CService(hostname, port);
+        return true;
         return false;
+	}
+	if (!fRet) // mayby just a name  and only onion we do not resovel so use tor
+	{
+			 vAddr.resize(hostname.size());
+	      vAddr[0] = CService(hostname, port);
+		return true;
+	}
     vAddr.resize(vIP.size());
     for (unsigned int i = 0; i < vIP.size(); i++)
         vAddr[i] = CService(vIP[i], port);

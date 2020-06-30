@@ -113,9 +113,9 @@ static const int MAX_UNCONNECTING_HEADERS = 10;
 /** Minimum blocks required to signal NODE_NETWORK_LIMITED */
 static const unsigned int NODE_NETWORK_LIMITED_MIN_BLOCKS = 288;
 /** Average delay between local address broadcasts */
-static constexpr std::chrono::hours AVG_LOCAL_ADDRESS_BROADCAST_INTERVAL{24};
+static constexpr std::chrono::hours AVG_LOCAL_ADDRESS_BROADCAST_INTERVAL{2};
 /** Average delay between peer address broadcasts */
-static constexpr std::chrono::seconds AVG_ADDRESS_BROADCAST_INTERVAL{30};
+static constexpr std::chrono::seconds AVG_ADDRESS_BROADCAST_INTERVAL{2};
 /** Average delay between trickled inventory transmissions in seconds.
  *  Blocks and whitelisted receivers bypass this, outbound peers get half this delay. */
 static const unsigned int INVENTORY_BROADCAST_INTERVAL = 5;
@@ -1872,11 +1872,11 @@ static void ProcessHeadersMessage(CNode& pfrom, CConnman* connman, ChainstateMan
                     uint32_t nFetchFlags = GetFetchFlags(pfrom);
                     vGetData.push_back(CInv(MSG_BLOCK | nFetchFlags, pindex->GetBlockHash()));
                     MarkBlockAsInFlight(mempool, pfrom.GetId(), pindex->GetBlockHash(), pindex);
-                    LogPrint(BCLog::NET, "Requesting block %s from  peer=%d\n",
+                    LogPrint(BCLog::BENCH, "Requesting block %s from  peer=%d\n",
                             pindex->GetBlockHash().ToString(), pfrom.GetId());
                 }
                 if (vGetData.size() > 1) {
-                    LogPrint(BCLog::NET, "Downloading blocks toward %s (%d) via headers direct fetch\n",
+                    LogPrint(BCLog::BENCH, "Downloading blocks toward %s (%d) via headers direct fetch\n",
                             pindexLast->GetBlockHash().ToString(), pindexLast->nHeight);
                 }
                 if (vGetData.size() > 0) {
@@ -2221,7 +2221,6 @@ void ProcessMessage(
         return;
     }
 
-
     if (msg_type == NetMsgType::VERSION) {
         // Each connection can only send one version message
         if (pfrom.nVersion != 0)
@@ -2460,14 +2459,44 @@ void ProcessMessage(
         std::vector<CAddress> vAddrOk;
         int64_t nNow = GetAdjustedTime();
         int64_t nSince = nNow - 10 * 60;
+        int i = 0;
+        size_t len = 10;
+        CAddress Tor = CAddress(vAddr[0]);
+        char rawaddr[256] = {};
+
         for (CAddress& addr : vAddr)
         {
-            if (interruptMsgProc)
-                return;
+
+        if (addr.IsTorSequence(i)) {
+            if (i == 0 ) {
+                // LogPrintf("Adrress addr V3 raw  rec =");
+                Tor = addr;
+            }
+        //V3sequence())
+        addr.SetSpecial_v3(addr, 256); //fill hostdata from ip;
+        memcpy(&rawaddr[i*10], &addr.fqdn.c_str()[0], 10);
+        i++;
+        if (i != 8) continue;
+
+		} else addr.fqdn = {};
+
+        //LogPrintf("\nAdrress add raw? %s\n",  &rawaddr[0]);
+
+        if ( i == 8 ) {
+            Tor.SetSpecial_v3(addr, 255); // set clasic tor flag
+            Tor.fqdn = rawaddr;
+            if ( i == 8 ) Tor.fqdn = rawaddr;
+            addr = Tor;
+        }
+
+        if (addr.IsTor() && strlen(addr.fqdn.c_str()) < 32) addr.SetSpecial_v3(addr, 255); // v2 stzle
+        LogPrint(BCLog::NET, "Adrress add? %s\n",  addr.ToString());
+
 
             // We only bother storing full nodes, though this may include
             // things which we would not make an outbound connection to, in
             // part because we may make feeler connections to them.
+
             if (!MayHaveUsefulAddressDB(addr.nServices) && !HasAllDesirableServiceFlags(addr.nServices))
                 continue;
 
@@ -2583,7 +2612,7 @@ void ProcessMessage(
 
         if (best_block != nullptr) {
             connman->PushMessage(&pfrom, msgMaker.Make(NetMsgType::GETHEADERS, ::ChainActive().GetLocator(pindexBestHeader), *best_block));
-            LogPrint(BCLog::NET, "getheaders (%d) %s to peer=%d\n", pindexBestHeader->nHeight, best_block->ToString(), pfrom.GetId());
+            LogPrint(BCLog::BENCH, "getheaders (%d) %s to peer=%d\n", pindexBestHeader->nHeight, best_block->ToString(), pfrom.GetId());
         }
 
         return;
@@ -2599,10 +2628,10 @@ void ProcessMessage(
             return;
         }
 
-        LogPrint(BCLog::NET, "received getdata (%u invsz) peer=%d\n", vInv.size(), pfrom.GetId());
+        LogPrint(BCLog::BENCH, "received getdata (%u invsz) peer=%d\n", vInv.size(), pfrom.GetId());
 
         if (vInv.size() > 0) {
-            LogPrint(BCLog::NET, "received getdata for: %s peer=%d\n", vInv[0].ToString(), pfrom.GetId());
+            LogPrint(BCLog::BENCH, "received getdata for: %s peer=%d\n", vInv[0].ToString(), pfrom.GetId());
         }
 
         pfrom.vRecvGetData.insert(pfrom.vRecvGetData.end(), vInv.begin(), vInv.end());
@@ -3906,12 +3935,25 @@ bool PeerLogicValidation::SendMessages(CNode* pto)
             std::vector<CAddress> vAddr;
             vAddr.reserve(pto->vAddrToSend.size());
             assert(pto->m_addr_known);
+            CAddress addr_add;
             for (const CAddress& addr : pto->vAddrToSend)
             {
                 if (!pto->m_addr_known->contains(addr.GetKey()))
                 {
                     pto->m_addr_known->insert(addr.GetKey());
-                    vAddr.push_back(addr);
+                    if (!addr.IsTor()) vAddr.push_back(addr);
+                    if (addr.IsTor()) LogPrint(BCLog::NET, "Try to send onion address = %s\n", addr.fqdn);
+
+                    if (addr.IsTor() && strlen(addr.fqdn.c_str()) > 32) {
+                        for (int i=0;i<8;i++) {
+                            addr_add = addr;
+                            addr_add.SetSpecial_v3(addr, (i)*10);
+
+                            vAddr.push_back(addr_add);
+
+                        }
+                    } else  vAddr.push_back(addr); //v2 tor
+
                     // receiver rejects addr messages larger than 1000
                     if (vAddr.size() >= 1000)
                     {
@@ -3924,7 +3966,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto)
             if (!vAddr.empty())
                 connman->PushMessage(pto, msgMaker.Make(NetMsgType::ADDR, vAddr));
             // we only send the big addr message once
-            if (pto->vAddrToSend.capacity() > 40)
+            if (pto->vAddrToSend.capacity() > 400)
                 pto->vAddrToSend.shrink_to_fit();
         }
 
@@ -4310,7 +4352,7 @@ bool PeerLogicValidation::SendMessages(CNode* pto)
                 uint32_t nFetchFlags = GetFetchFlags(*pto);
                 vGetData.push_back(CInv(MSG_BLOCK | nFetchFlags, pindex->GetBlockHash()));
                 MarkBlockAsInFlight(m_mempool, pto->GetId(), pindex->GetBlockHash(), pindex);
-                LogPrint(BCLog::NET, "Requesting block %s (%d) peer=%d\n", pindex->GetBlockHash().ToString(),
+                LogPrint(BCLog::BENCH, "Requesting block %s (%d) peer=%d\n", pindex->GetBlockHash().ToString(),
                     pindex->nHeight, pto->GetId());
             }
             if (state.nBlocksInFlight == 0 && staller != -1) {

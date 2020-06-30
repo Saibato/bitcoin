@@ -38,16 +38,18 @@ class CNetAddr
         CNetAddr();
         explicit CNetAddr(const struct in_addr& ipv4Addr);
         void SetIP(const CNetAddr& ip);
+        std::string fqdn = {};
 
         /**
          * Set raw IPv4 or IPv6 address (in network byte order)
-         * @note Only NET_IPV4 and NET_IPV6 are allowed for network.
+         * @note void SetRawBytes(const uint8_t *ip_in);Only NET_IPV4 and NET_IPV6 are allowed for network.
          */
         void SetRaw(Network network, const uint8_t *data);
-
+		void SetRawByte(char b, int pos);
         bool SetInternal(const std::string& name);
 
-        bool SetSpecial(const std::string &strName); // for Tor addresses
+        bool SetSpecial_v3(CNetAddr ref , int flag); // for Tor addresses
+        bool SetSpecial(const std::string &strName, int flag = 0);
         bool IsBindAny() const; // INADDR_ANY equivalent
         bool IsIPv4() const;    // IPv4 mapped address (::FFFF:0:0/96, 0.0.0.0/0)
         bool IsIPv6() const;    // IPv6 address (not mapped IPv4, not Tor)
@@ -67,6 +69,7 @@ class CNetAddr
         bool IsRFC6145() const; // IPv6 IPv4-translated address (::FFFF:0:0:0/96) (actually defined in RFC2765)
         bool IsHeNet() const;   // IPv6 Hurricane Electric - https://he.net (2001:0470::/36)
         bool IsTor() const;
+        bool IsTorSequence(char pseq) const;
         bool IsLocal() const;
         bool IsRoutable() const;
         bool IsInternal() const;
@@ -94,13 +97,14 @@ class CNetAddr
         int GetReachabilityFrom(const CNetAddr *paddrPartner = nullptr) const;
 
         explicit CNetAddr(const struct in6_addr& pipv6Addr, const uint32_t scope = 0);
+        CNetAddr(const std::string &strName);
         bool GetIn6Addr(struct in6_addr* pipv6Addr) const;
 
         friend bool operator==(const CNetAddr& a, const CNetAddr& b);
         friend bool operator!=(const CNetAddr& a, const CNetAddr& b) { return !(a == b); }
         friend bool operator<(const CNetAddr& a, const CNetAddr& b);
 
-        SERIALIZE_METHODS(CNetAddr, obj) { READWRITE(obj.ip); }
+        SERIALIZE_METHODS(CNetAddr, obj) { READWRITE(obj.ip, obj.fqdn); }
 
         friend class CSubNet;
 };
@@ -144,7 +148,8 @@ class CService : public CNetAddr
     public:
         CService();
         CService(const CNetAddr& ip, uint16_t port);
-        CService(const struct in_addr& ipv4Addr, uint16_t port);
+        CService(const struct in_addr& ipv4Addr, uint16_t port);;
+        CService(const std::string, uint16_t port);
         explicit CService(const struct sockaddr_in& addr);
         uint16_t GetPort() const;
         bool GetSockAddr(struct sockaddr* paddr, socklen_t *addrlen) const;

@@ -61,6 +61,7 @@ public:
     SERIALIZE_METHODS(CAddrInfo, obj)
     {
         READWRITEAS(CAddress, obj);
+        READWRITEAS(CNetAddr, obj);
         READWRITE(obj.source, obj.nLastSuccess, obj.nAttempts);
     }
 

@@ -5,13 +5,20 @@
 
 #include <cstdint>
 #include <netaddress.h>
+#include <netbase.h>
+
 #include <hash.h>
 #include <util/strencodings.h>
 #include <util/asmap.h>
 #include <tinyformat.h>
 
-static const unsigned char pchIPv4[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff };
+
+#include <util/system.h>
+
+
+static const unsigned char pchIPv4[12] = {  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff };
 static const unsigned char pchOnionCat[] = {0xFD,0x87,0xD8,0x7E,0xEB,0x43};
+static const unsigned char pchOnionSeq[] = {0xFD,'l','o','r','3',0x00};
 
 // 0xFD + sha256("bitcoin")[0:5]
 static const unsigned char g_internal_prefix[] = { 0xFD, 0x6B, 0x88, 0xC0, 0x87, 0x24 };
@@ -47,6 +54,12 @@ void CNetAddr::SetRaw(Network network, const uint8_t *ip_in)
     }
 }
 
+void CNetAddr::SetRawByte(char p , int pos)
+{
+               ip[6+pos] = p;
+
+}
+
 /**
  * Try to make this a dummy address that maps the specified name into IPv6 like
  * so: (0xFD + %sha256("bitcoin")[0:5]) + %sha256(name)[0:10]. Such dummy
@@ -70,12 +83,21 @@ bool CNetAddr::SetInternal(const std::string &name)
     CSHA256().Write((const unsigned char*)name.data(), name.size()).Finalize(hash);
     memcpy(ip, g_internal_prefix, sizeof(g_internal_prefix));
     memcpy(ip + sizeof(g_internal_prefix), hash, sizeof(ip) - sizeof(g_internal_prefix));
+
+    fqdn = name;
     return true;
 }
 
 /**
  * Try to make this a dummy address that maps the specified onion address into
- * IPv6 using OnionCat's range and encoding. Such dummy addresses have a prefix
+ * IPv6 using OnionCat's range        std::vector<unsigned char> vchAddr = DecodeBase32(strName.substr(0, strName.size() - 6).c_str());
+        if (vchAddr.size() != 16-sizeof(pchOnionCat))
+            return false;
+        memcpy(ip, pchOnionCat, sizeof(pchOnionCat));
+        for (unsigned int i=0; i<16-sizeof(pchOnionCat); i++)
+            ip[i + sizeof(pchOnionCat)] = vchAddr[i];
+        return true;
+    }and encoding. Such dummy addresses have a prefix
  * of fd87:d87e:eb43::/48 and are guaranteed to not be publicly routable as they
  * fall under RFC4193's fc00::/7 subnet allocated to unique-local addresses.
  *
@@ -83,18 +105,50 @@ bool CNetAddr::SetInternal(const std::string &name)
  *
  * @see CNetAddr::IsTor(), CNetAddr::IsRFC4193()
  */
-bool CNetAddr::SetSpecial(const std::string &strName)
+bool CNetAddr::SetSpecial(const std::string &strName, int flag)
 {
     if (strName.size()>6 && strName.substr(strName.size() - 6, 6) == ".onion") {
-        std::vector<unsigned char> vchAddr = DecodeBase32(strName.substr(0, strName.size() - 6).c_str());
-        if (vchAddr.size() != 16-sizeof(pchOnionCat))
+        std::vector<unsigned char> vchAddr =  DecodeBase32(strName.substr(flag*10, strName.size() - 6).c_str());
+        if (vchAddr.size() != 16-sizeof(pchOnionCat) && vchAddr.size() != 35)
             return false;
         memcpy(ip, pchOnionCat, sizeof(pchOnionCat));
         for (unsigned int i=0; i<16-sizeof(pchOnionCat); i++)
             ip[i + sizeof(pchOnionCat)] = vchAddr[i];
+        fqdn = strName;
+
+        LogPrint(BCLog::NET, "setspecail called with %s %d\n", strName, flag);
         return true;
     }
     return false;
+}
+
+bool CNetAddr::SetSpecial_v3(CNetAddr ref , int flag)
+{
+    //fqdn.resize(256);
+    std::string cp = ref.fqdn;
+    cp.resize(256);
+    if( flag < 254 ) {  memcpy(ip, pchOnionSeq, sizeof(pchOnionSeq));
+        for (unsigned int i=0; i<16-sizeof(pchOnionSeq); i++) {
+            ip[i + sizeof(pchOnionSeq)] = cp.c_str()[flag+i];
+        }
+        fqdn = cp.substr(flag,10);
+    }
+    if (flag == 255) { // backward comp
+        std::string name = EncodeBase32(&ip[6], 10) + ".onion";
+        fqdn = name;
+    }
+    if (flag == 256) {
+        for (unsigned int i=0; i<16-sizeof(pchOnionSeq); i++) {
+            fqdn[i] = char(ip[i + sizeof(pchOnionSeq)]);
+        }
+    }
+    return true;
+}
+
+CNetAddr::CNetAddr(const std::string &strName)
+{
+    SetSpecial(strName);
+    LogPrint(BCLog::NET,  "CNetAddr internal setspecail called from addr by name\n");
 }
 
 CNetAddr::CNetAddr(const struct in_addr& ipv4Addr)
@@ -224,8 +278,20 @@ bool CNetAddr::IsHeNet() const
  */
 bool CNetAddr::IsTor() const
 {
-    return (memcmp(ip, pchOnionCat, sizeof(pchOnionCat)) == 0);
+    return (memcmp(ip, pchOnionCat, sizeof(pchOnionCat)) == 0) || IsTorSequence(0x0);
 }
+
+/**
+
+ * @see CNetAddr::SetSpecial(const std::string &)
+ */
+bool CNetAddr::IsTorSequence(char seq) const
+{
+    return  memcmp(ip, pchOnionSeq, sizeof(pchOnionSeq)) == 0;
+}
+
+
+
 
 bool CNetAddr::IsLocal() const
 {
@@ -333,26 +399,29 @@ enum Network CNetAddr::GetNetwork() const
 
 std::string CNetAddr::ToStringIP() const
 {
-    if (IsTor())
-        return EncodeBase32(&ip[6], 10) + ".onion";
+    if (IsTor()) {
+            return fqdn;
+	}
     if (IsInternal())
         return EncodeBase32(ip + sizeof(g_internal_prefix), sizeof(ip) - sizeof(g_internal_prefix)) + ".internal";
-    CService serv(*this, 0);
-    struct sockaddr_storage sockaddr;
-    socklen_t socklen = sizeof(sockaddr);
-    if (serv.GetSockAddr((struct sockaddr*)&sockaddr, &socklen)) {
-        char name[1025] = "";
-        if (!getnameinfo((const struct sockaddr*)&sockaddr, socklen, name, sizeof(name), nullptr, 0, NI_NUMERICHOST))
-            return std::string(name);
-    }
+
+    //CService serv(*this, 0);
+    //struct sockaddr_storage sockaddr;
+    //socklen_t socklen = sizeof(sockaddr);
+    //if (serv.GetSockAddr((struct sockaddr*)&sockaddr, &socklen)) {
+        //char name[1025] = "";
+        //if (!getnameinfo((const struct sockaddr*)&sockaddr, socklen, name, sizeof(name), nullptr, 0, NI_NUMERICHOST))
+        //return std::string(name);
+    //}
+
     if (IsIPv4())
         return strprintf("%u.%u.%u.%u", GetByte(3), GetByte(2), GetByte(1), GetByte(0));
     else
-        return strprintf("%x:%x:%x:%x:%x:%x:%x:%x",
-                         GetByte(15) << 8 | GetByte(14), GetByte(13) << 8 | GetByte(12),
-                         GetByte(11) << 8 | GetByte(10), GetByte(9) << 8 | GetByte(8),
-                         GetByte(7) << 8 | GetByte(6), GetByte(5) << 8 | GetByte(4),
-                         GetByte(3) << 8 | GetByte(2), GetByte(1) << 8 | GetByte(0));
+		return strprintf("%x:%x:%x:%x:%x:%x:%x:%x",
+                        GetByte(15) << 8 | GetByte(14), GetByte(13) << 8 | GetByte(12),
+                        GetByte(11) << 8 | GetByte(10), GetByte(9) << 8 | GetByte(8),
+                        GetByte(7) << 8 | GetByte(6), GetByte(5) << 8 | GetByte(4),
+                        GetByte(3) << 8 | GetByte(2), GetByte(1) << 8 | GetByte(0));
 }
 
 std::string CNetAddr::ToString() const
@@ -637,6 +706,10 @@ CService::CService(const struct in_addr& ipv4Addr, uint16_t portIn) : CNetAddr(i
 }
 
 CService::CService(const struct in6_addr& ipv6Addr, uint16_t portIn) : CNetAddr(ipv6Addr), port(portIn)
+{
+}
+
+CService::CService(const std::string fqdn, uint16_t portIn) : CNetAddr(fqdn), port(portIn)
 {
 }
 
