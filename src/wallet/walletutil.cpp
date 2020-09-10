@@ -57,7 +57,6 @@ bool IsBerkeleyBtree(const fs::path& path)
 std::vector<fs::path> ListWalletDir()
 {
     const fs::path wallet_dir = GetWalletDir();
-    const size_t offset = wallet_dir.string().size() + 1;
     std::vector<fs::path> paths;
     boost::system::error_code ec;
 
@@ -68,8 +67,8 @@ std::vector<fs::path> ListWalletDir()
         }
 
         // Get wallet path relative to walletdir by removing walletdir from the wallet path.
-        // This can be replaced by boost::filesystem::lexically_relative once boost is bumped to 1.60.
-        const fs::path path = it->path().string().substr(offset);
+
+        const fs::path path = fs::relative(it->path(), wallet_dir);
 
         if (it->status().type() == fs::directory_file && IsBerkeleyBtree(it->path() / "wallet.dat")) {
             // Found a directory which contains wallet.dat btree file, add it as a wallet.
