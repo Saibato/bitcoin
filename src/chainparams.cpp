@@ -147,6 +147,18 @@ public:
         // rm -rf /tmp/test &  mkdir /tmp/test & src/qt/bitcoin-qt -datadir=/tmp/test -nodns -bind=127.0.0.1 -debug=1
         // btw. same effect
         //
+        // or
+        // rm -rf /tmp/test &  mkdir /tmp/test & src/qt/bitcoin-qt -datadir=/tmp/test -connect=127.0.0.1 -bind=127.0.0.1 -debug=1
+        // look at the debug log connect while u say onlynet=ipv6
+        // The overall naming of options in core is often more that misleading.
+        // And in the case of -onlynet=onion to direct outbound connect over the Tor socks to the first address the exit gets from a
+        // seeder DNS or a mitm is easy to correleate by timing since the sequence that seeders will be called is fixed.
+        //
+        // The point is, that u probably have messed up privacy before finding out that u can not just run the node
+        // and hope core is by default is a privacy node, so the notion, use ur own node to
+        // have privacy is difficult to archive by default.
+        // And up till now, the documentation about that is incorrect.
+        //
         vSeeds.emplace_back("routetoself.org"); // our DNS node
 
         base58Prefixes[PUBKEY_ADDRESS] = std::vector<unsigned char>(1,0);
