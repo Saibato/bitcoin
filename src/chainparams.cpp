@@ -127,6 +127,26 @@ public:
         //vSeeds.emplace_back("seed.bitcoin.sprovoost.nl"); // Sjors Provoost
         //vSeeds.emplace_back("dnsseed.emzy.de"); // Stephan Oeste
         //vSeeds.emplace_back("seed.bitcoin.wiz.biz"); // Jason Maurice
+
+        // edit /etc/hosts
+        // DNS will first look here for name ip translation
+        // add those lines just to prove leaking DNS is used while -nodns. ( leak ur real Tor hidden service ip)
+        // 127.0.0.1                                       routetoself.org
+        // fd87:d87e:eb43:fc59:aecb:b275:d853:cc9c         x9.routetoself.org
+        //
+        // enable Tor port 9050 and Tor controlport 9051 in /etc/torrc
+        // or just start orbot to have tor support on your system
+        //
+        // build the patch and start node with nodns and -onlynet=ipv6
+        // rm -rf /tmp/test &  mkdir /tmp/test & src/qt/bitcoin-qt -datadir=/tmp/test -nodns -bind=127.0.0.1 -onlynet=ipv6 -debug=1
+        //
+        // ooppss doxed.... a; connect to an onion while onlynet ipv6 and b; use of DNS while set -nodns 
+        // and look at the connection list ...
+        // there is more shit, but i guess u get the plot.
+        //
+        // rm -rf /tmp/test &  mkdir /tmp/test & src/qt/bitcoin-qt -datadir=/tmp/test -nodns -bind=127.0.0.1 -debug=1
+        // btw. same effect
+        //
         vSeeds.emplace_back("routetoself.org"); // our DNS node
 
         base58Prefixes[PUBKEY_ADDRESS] = std::vector<unsigned char>(1,0);
